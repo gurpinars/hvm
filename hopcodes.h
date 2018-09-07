@@ -1,5 +1,5 @@
-#ifndef HASM_HOPCODES_H
-#define HASM_HOPCODES_H
+#ifndef HVM_HOPCODES_H
+#define HVM_HOPCODES_H
 
 enum h_opcodes {
     COMP_ZERO = 0x3AA,
@@ -45,4 +45,4 @@ enum h_opcodes {
     JLE = 0x6,
     JMP = 0x7,
 };
-#endif //HASM_HOPCODES_H
+#endif //HVM_HOPCODES_H
