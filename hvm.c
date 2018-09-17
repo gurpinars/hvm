@@ -95,6 +95,32 @@ int main(int argc, char *argv[]) {
     snapshot(&hdt);
 }
 
+static void snapshot(HVMData *hdt) {
+    char *msg = " _   ___      ____  __   \n"
+                "| | | |\\ \\   / |  \\/  |  \n"
+                "| |_| | \\ \\ / /| |\\/| |  \n"
+                "|  _  |  \\ V / | |  | |  \n"
+                "|_| |_|   \\_/  |_|  |_|  \n"
+                "                          \n"
+                "Memory Snapshot \n"
+                "****************************************\n"
+                "*           *            *    CPU      *\n"
+                "*           *            ***************\n"
+                "*   ROM     *   RAM      |  A REG [%d]  \n"
+                "*           *            |--------------\n"
+                "*           *            |  D REG [%d]  \n"
+                "*           *            |--------------\n"
+                "*           *            |  PC [%d]     \n";
+
+    char *memories = "_________________________\n"
+                "|  %x             %d     \n";
+    printf(msg, hdt->A_REG, hdt->D_REG, hdt->pc);
+    for (int i = 0; ROM[i] ^ 0xffff; ++i) {
+        printf(memories, ROM[i], RAM[i]);
+    }
+
+}
+
 
 static void vm_init(char *arg) {
     uint16_t buff;
@@ -119,7 +145,7 @@ static void vm_init(char *arg) {
     while (fread(&buff, sizeof(buff), 1, hexfp) != 0) {
         ROM[ind++] = read_msb(buff);
     }
-    // our end-of-program signature
+    // end-of-program signature
     ROM[ind] = (uint16_t) EOF;
     hvm_fclose(hexfp);
 }
@@ -136,115 +162,864 @@ static void decode(uint16_t instr, HVMData *hdt) {
         return;
     }
     // extract comp,dest,jmp parts of instr
-    hdt->comp = (uint16_t) ((instr & 0xFFC0) >> 6); // 1111111111000000
-    hdt->dest = (uint8_t) ((instr & 0x38) >> 3); //  0000000000111000
-    hdt->jmp = (uint8_t) (instr & 0x07); // 0000000000000111
+    hdt->comp = (uint16_t) ((instr & 0xFFC0) >> 6);     // 1111111111000000
+    hdt->dest = (uint8_t) ((instr & 0x38) >> 3);        // 0000000000111000
+    hdt->jmp = (uint8_t) (instr & 0x07);                // 0000000000000111
 
     // turn machine state execute
     hdt->state = hvm_execute;
 }
 
-#define SWITCH_CASE_DEST(OPCODE, ptrVmData, COMP)       \
-    case OPCODE:                                        \
-        switch ((ptrVmData)->dest) {                    \
-            case DEST_M:                                \
-                RAM[(ptrVmData)->A_REG] = COMP;         \
-                break;                                  \
-            case DEST_D:                                \
-                (ptrVmData)->D_REG = COMP;              \
-                break;                                  \
-            case DEST_MD:                               \
-                (ptrVmData)->D_REG = COMP;              \
-                RAM[(ptrVmData)->A_REG] = COMP;         \
-                break;                                  \
-            case DEST_A:                                \
-                (ptrVmData)->A_REG = COMP;              \
-                break;                                  \
-            case DEST_AM:                               \
-                RAM[(ptrVmData)->A_REG] = COMP;         \
-                (ptrVmData)->A_REG = COMP;              \
-                break;                                  \
-            case DEST_AD:                               \
-                (ptrVmData)->D_REG = COMP;              \
-                (ptrVmData)->A_REG = COMP;              \
-                break;                                  \
-            case DEST_AMD:                              \
-                RAM[(ptrVmData)->A_REG] = COMP;         \
-                (ptrVmData)->A_REG = COMP;              \
-                (ptrVmData)->D_REG = COMP;              \
-                break;                                  \
-            default:                                    \
-                break;                                  \
-        }                                               \
-        break;                                          \
-
-#define SWITCH_CASE_JMP(OPCODE, ptrVmData, COMP)                \
-    case OPCODE:                                                \
-        switch ((ptrVmData)->jmp) {                             \
-            case JGT:                                           \
-                if ((COMP) > 0)                                 \
-                    (ptrVmData)->pc = (ptrVmData)->A_REG;       \
-                break;                                          \
-            case JEQ:                                           \
-                if ((COMP) == 0)                                \
-                    (ptrVmData)->pc = (ptrVmData)->A_REG;       \
-                break;                                          \
-            case JGE:                                           \
-                if ((COMP) >= 0)                                \
-                    (ptrVmData)->pc = (ptrVmData)->A_REG;       \
-                break;                                          \
-            case JLT:                                           \
-                if ((COMP) < 0)                                 \
-                    (ptrVmData)->pc = (ptrVmData)->A_REG;       \
-                break;                                          \
-            case JNE:                                           \
-                if ((COMP) != 0)                                \
-                    (ptrVmData)->pc = (ptrVmData)->A_REG;       \
-                break;                                          \
-            case JLE:                                           \
-                if ((COMP) <= 0)                                \
-                    (ptrVmData)->pc = (ptrVmData)->A_REG;       \
-                    break;                                      \
-            case JMP:                                           \
-                (ptrVmData)->pc = (ptrVmData)->A_REG;           \
-            default:                                            \
-                break;                                          \
-        }                                                       \
-        break;                                                  \
-
 
 static void execute(HVMData *hdt) {
     if (!(hdt->jmp ^ 0x0)) {
         switch (hdt->comp) {
-            SWITCH_CASE_DEST(COMP_ZERO, hdt, 0)
-            SWITCH_CASE_DEST(COMP_ONE, hdt, 0x1)
-            SWITCH_CASE_DEST(COMP_MINUS_1, hdt, -1)
-            SWITCH_CASE_DEST(COMP_D, hdt, hdt->D_REG)
-            SWITCH_CASE_DEST(COMP_A, hdt, hdt->A_REG)
-            SWITCH_CASE_DEST(COMP_NOT_D, hdt, ~(hdt->D_REG))
-            SWITCH_CASE_DEST(COMP_NOT_A, hdt, ~(hdt->A_REG))
-            SWITCH_CASE_DEST(COMP_MINUS_D, hdt, -hdt->D_REG)
-            SWITCH_CASE_DEST(COMP_MINUS_A, hdt, -hdt->A_REG)
-            SWITCH_CASE_DEST(COMP_D_PLUS_1, hdt, ++hdt->D_REG)
-            SWITCH_CASE_DEST(COMP_A_PLUS_1, hdt, ++hdt->A_REG)
-            SWITCH_CASE_DEST(COMP_D_MINUS_1, hdt, --hdt->D_REG)
-            SWITCH_CASE_DEST(COMP_A_MINUS_1, hdt, --hdt->A_REG)
-            SWITCH_CASE_DEST(COMP_D_PLUS_A, hdt, (hdt->D_REG + hdt->A_REG))
-            SWITCH_CASE_DEST(COMP_D_MINUS_A, hdt, (hdt->D_REG - hdt->A_REG))
-            SWITCH_CASE_DEST(COMP_A_MINUS_D, hdt, (hdt->A_REG - hdt->D_REG))
-            SWITCH_CASE_DEST(COMP_D_AND_A, hdt, (hdt->D_REG & hdt->A_REG))
-            SWITCH_CASE_DEST(COMP_D_OR_A, hdt, (hdt->D_REG | hdt->A_REG))
-            SWITCH_CASE_DEST(COMP_M, hdt, RAM[hdt->A_REG])
-            SWITCH_CASE_DEST(COMP_NOT_M, hdt, ~RAM[hdt->A_REG])
-            SWITCH_CASE_DEST(COMP_MINUS_M, hdt, -RAM[hdt->A_REG])
-            SWITCH_CASE_DEST(COMP_M_PLUS_1, hdt, ++RAM[hdt->A_REG])
-            SWITCH_CASE_DEST(COMP_M_MINUS_1, hdt, --RAM[hdt->A_REG])
-            SWITCH_CASE_DEST(COMP_D_PLUS_M, hdt, (hdt->D_REG + RAM[hdt->A_REG]))
-            SWITCH_CASE_DEST(COMP_D_MINUS_M, hdt, (hdt->D_REG - RAM[hdt->A_REG]))
-            SWITCH_CASE_DEST(COMP_M_MINUS_D, hdt, (RAM[hdt->A_REG] - hdt->D_REG))
-            SWITCH_CASE_DEST(COMP_D_AND_M, hdt, (hdt->D_REG & RAM[hdt->A_REG]))
-            SWITCH_CASE_DEST(COMP_D_OR_M, hdt, (hdt->D_REG | RAM[hdt->A_REG]))
+            case COMP_ZERO:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = 0x0;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = 0x0;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = 0x0;
+                        RAM[hdt->A_REG] = 0x0;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = 0x0;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = 0x0;
+                        hdt->A_REG = 0x0;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = 0x0;
+                        hdt->A_REG = 0x0;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = 0x0;
+                        hdt->A_REG = 0x0;
+                        hdt->D_REG = 0x0;
+                        break;
+                    default:
+                        break;
+                }
 
+                break;
+            case COMP_ONE:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = 0x1;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = 0x1;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = 0x1;
+                        RAM[hdt->A_REG] = 0x1;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = 0x1;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = 0x1;
+                        hdt->A_REG = 0x1;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = 0x1;
+                        hdt->A_REG = 0x1;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = 0x1;
+                        hdt->A_REG = 0x1;
+                        hdt->D_REG = 0x1;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_MINUS_1:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = -1;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = -1;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = -1;
+                        RAM[hdt->A_REG] = -1;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = -1;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = -1;
+                        hdt->A_REG = -1;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = -1;
+                        hdt->A_REG = -1;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = -1;
+                        hdt->A_REG = -1;
+                        hdt->D_REG = -1;
+                        break;
+                    default:
+                        break;
+                }
+
+                break;
+            case COMP_D:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = hdt->D_REG;
+                        break;
+                    case DEST_D:
+                        break;
+                    case DEST_MD:
+                        RAM[hdt->A_REG] = hdt->D_REG;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = hdt->D_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = hdt->D_REG;
+                        hdt->A_REG = hdt->D_REG;
+                        break;
+                    case DEST_AD:
+                        hdt->A_REG = hdt->D_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = hdt->D_REG;
+                        hdt->A_REG = hdt->D_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_A:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = hdt->A_REG;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = hdt->A_REG;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = hdt->A_REG;
+                        RAM[hdt->A_REG] = hdt->A_REG;
+                        break;
+                    case DEST_A:
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = hdt->A_REG;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = hdt->A_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = hdt->A_REG;
+                        hdt->D_REG = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+
+                break;
+            case COMP_NOT_D:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = ~(hdt->D_REG);
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = ~(hdt->D_REG);
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = ~(hdt->D_REG);
+                        RAM[hdt->A_REG] = ~(hdt->D_REG);
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = ~(hdt->D_REG);
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = ~(hdt->D_REG);
+                        hdt->A_REG = ~(hdt->D_REG);
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = ~(hdt->D_REG);
+                        hdt->A_REG = ~(hdt->D_REG);
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = ~(hdt->D_REG);
+                        hdt->A_REG = ~(hdt->D_REG);
+                        hdt->D_REG = ~(hdt->D_REG);
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_NOT_A:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = ~(hdt->A_REG);
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = ~(hdt->A_REG);
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = ~(hdt->A_REG);
+                        RAM[hdt->A_REG] = ~(hdt->A_REG);
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = ~(hdt->A_REG);
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = ~(hdt->A_REG);
+                        hdt->A_REG = ~(hdt->A_REG);
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = ~(hdt->A_REG);
+                        hdt->A_REG = ~(hdt->A_REG);
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = ~(hdt->A_REG);
+                        hdt->A_REG = ~(hdt->A_REG);
+                        hdt->D_REG = ~(hdt->A_REG);
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_MINUS_D:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = -hdt->D_REG;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = -hdt->D_REG;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = -hdt->D_REG;
+                        RAM[hdt->A_REG] = -hdt->D_REG;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = -hdt->D_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = -hdt->D_REG;
+                        hdt->A_REG = -hdt->D_REG;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = -hdt->D_REG;
+                        hdt->A_REG = -hdt->D_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = -hdt->D_REG;
+                        hdt->A_REG = -hdt->D_REG;
+                        hdt->D_REG = -hdt->D_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_MINUS_A:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = -hdt->A_REG;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = -hdt->A_REG;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = -hdt->A_REG;
+                        RAM[hdt->A_REG] = -hdt->A_REG;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = -hdt->A_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = -hdt->A_REG;
+                        hdt->A_REG = -hdt->A_REG;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = -hdt->A_REG;
+                        hdt->A_REG = -hdt->A_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = -hdt->A_REG;
+                        hdt->A_REG = -hdt->A_REG;
+                        hdt->D_REG = -hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_PLUS_1:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = ++hdt->D_REG;
+                        break;
+                    case DEST_D:
+                        ++hdt->D_REG;
+                        break;
+                    case DEST_MD:
+                        ++hdt->D_REG;
+                        RAM[hdt->A_REG] = hdt->D_REG;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = ++hdt->D_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = ++hdt->D_REG;
+                        hdt->A_REG = hdt->D_REG;
+                        break;
+                    case DEST_AD:
+                        ++hdt->D_REG;
+                        hdt->A_REG = hdt->D_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = ++hdt->D_REG;
+                        hdt->A_REG = hdt->D_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_A_PLUS_1:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = ++hdt->A_REG;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = ++hdt->A_REG;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = ++hdt->A_REG;
+                        RAM[hdt->A_REG] = hdt->A_REG;
+                        break;
+                    case DEST_A:
+                        ++hdt->A_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = ++hdt->A_REG;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = ++hdt->A_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = ++hdt->A_REG;
+                        hdt->D_REG = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_MINUS_1:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = --hdt->D_REG;
+                        break;
+                    case DEST_D:
+                        --hdt->D_REG;
+                        break;
+                    case DEST_MD:
+                        --hdt->D_REG;
+                        RAM[hdt->A_REG] = hdt->D_REG;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = --hdt->D_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = --hdt->D_REG;
+                        hdt->A_REG = hdt->D_REG;
+                        break;
+                    case DEST_AD:
+                        --hdt->D_REG;
+                        hdt->A_REG = hdt->D_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = --hdt->D_REG;
+                        hdt->A_REG = hdt->D_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_A_MINUS_1:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = --hdt->A_REG;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = --hdt->A_REG;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = --hdt->A_REG;
+                        RAM[hdt->A_REG] = hdt->A_REG;
+                        break;
+                    case DEST_A:
+                        --hdt->A_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = --hdt->A_REG;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = --hdt->A_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = --hdt->A_REG;
+                        hdt->D_REG = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_PLUS_A:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = hdt->D_REG + hdt->A_REG;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG += hdt->A_REG;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG += hdt->A_REG;
+                        RAM[hdt->A_REG] = hdt->D_REG + hdt->A_REG;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG += hdt->D_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = hdt->D_REG + hdt->A_REG;
+                        hdt->A_REG += hdt->D_REG;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG += hdt->A_REG;
+                        hdt->A_REG += hdt->D_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = hdt->D_REG + hdt->A_REG;
+                        hdt->A_REG += hdt->D_REG;
+                        hdt->D_REG += hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_MINUS_A:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = hdt->D_REG - hdt->A_REG;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG -= hdt->A_REG;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG -= hdt->A_REG;
+                        RAM[hdt->A_REG] = hdt->D_REG - hdt->A_REG;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = hdt->D_REG - hdt->A_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = hdt->D_REG - hdt->A_REG;
+                        hdt->A_REG = hdt->D_REG - hdt->A_REG;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG -= hdt->A_REG;
+                        hdt->A_REG = hdt->D_REG - hdt->A_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = hdt->D_REG - hdt->A_REG;
+                        hdt->A_REG = hdt->D_REG - hdt->A_REG;
+                        hdt->D_REG -= hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_A_MINUS_D:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = hdt->A_REG - hdt->D_REG;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = hdt->A_REG - hdt->D_REG;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = hdt->A_REG - hdt->D_REG;
+                        RAM[hdt->A_REG] = hdt->A_REG - hdt->D_REG;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG -= hdt->D_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = hdt->A_REG - hdt->D_REG;
+                        hdt->A_REG -= hdt->D_REG;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = hdt->A_REG - hdt->D_REG;
+                        hdt->A_REG -= hdt->D_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = hdt->A_REG - hdt->D_REG;
+                        hdt->A_REG -= hdt->D_REG;
+                        hdt->D_REG = hdt->A_REG - hdt->D_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_AND_A:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = hdt->D_REG & hdt->A_REG;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG &= hdt->A_REG;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG &= hdt->A_REG;
+                        RAM[hdt->A_REG] = hdt->D_REG & hdt->A_REG;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = hdt->D_REG & hdt->A_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = hdt->D_REG & hdt->A_REG;
+                        hdt->A_REG = hdt->D_REG & hdt->A_REG;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG &= hdt->A_REG;
+                        hdt->A_REG = hdt->D_REG & hdt->A_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = hdt->D_REG & hdt->A_REG;
+                        hdt->A_REG = hdt->D_REG & hdt->A_REG;
+                        hdt->D_REG &= hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_OR_A:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = hdt->D_REG | hdt->A_REG;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG |= hdt->A_REG;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG |= hdt->A_REG;
+                        RAM[hdt->A_REG] = hdt->D_REG | hdt->A_REG;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = hdt->D_REG | hdt->A_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = hdt->D_REG | hdt->A_REG;
+                        hdt->A_REG = hdt->D_REG | hdt->A_REG;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG |= hdt->A_REG;
+                        hdt->A_REG = hdt->D_REG | hdt->A_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = hdt->D_REG | hdt->A_REG;
+                        hdt->A_REG = hdt->D_REG | hdt->A_REG;
+                        hdt->D_REG |= hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_M:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = RAM[hdt->A_REG];
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = RAM[hdt->A_REG];
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = RAM[hdt->A_REG];
+                        break;
+                    case DEST_AM:
+                        hdt->A_REG = RAM[hdt->A_REG];
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = RAM[hdt->A_REG];
+                        hdt->A_REG = RAM[hdt->A_REG];
+                        break;
+                    case DEST_AMD:
+                        hdt->A_REG = RAM[hdt->A_REG];
+                        hdt->D_REG = RAM[hdt->A_REG];
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_NOT_M:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = ~RAM[hdt->A_REG];
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = ~RAM[hdt->A_REG];
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = ~RAM[hdt->A_REG];
+                        RAM[hdt->A_REG] = ~RAM[hdt->A_REG];
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = ~RAM[hdt->A_REG];
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = ~RAM[hdt->A_REG];
+                        hdt->A_REG = ~RAM[hdt->A_REG];
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = ~RAM[hdt->A_REG];
+                        hdt->A_REG = ~RAM[hdt->A_REG];
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = ~RAM[hdt->A_REG];
+                        hdt->A_REG = ~RAM[hdt->A_REG];
+                        hdt->D_REG = ~RAM[hdt->A_REG];
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_MINUS_M:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = -RAM[hdt->A_REG];
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = -RAM[hdt->A_REG];
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = -RAM[hdt->A_REG];
+                        RAM[hdt->A_REG] = -RAM[hdt->A_REG];
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = -RAM[hdt->A_REG];
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = -RAM[hdt->A_REG];
+                        hdt->A_REG = -RAM[hdt->A_REG];
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = -RAM[hdt->A_REG];
+                        hdt->A_REG = -RAM[hdt->A_REG];
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = -RAM[hdt->A_REG];
+                        hdt->A_REG = -RAM[hdt->A_REG];
+                        hdt->D_REG = -RAM[hdt->A_REG];
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_M_PLUS_1:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        ++RAM[hdt->A_REG];
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = ++RAM[hdt->A_REG];
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = ++RAM[hdt->A_REG];
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = ++RAM[hdt->A_REG];
+                        break;
+                    case DEST_AM:
+                        ++RAM[hdt->A_REG];
+                        hdt->A_REG = RAM[hdt->A_REG];
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = ++RAM[hdt->A_REG];
+                        hdt->A_REG = RAM[hdt->A_REG];
+                        break;
+                    case DEST_AMD:
+                        ++RAM[hdt->A_REG];
+                        hdt->A_REG = RAM[hdt->A_REG];
+                        hdt->D_REG = RAM[hdt->A_REG];
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_PLUS_M:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = hdt->D_REG + RAM[hdt->A_REG];
+                        break;
+                    case DEST_D:
+                        hdt->D_REG += RAM[hdt->A_REG];
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG += RAM[hdt->A_REG];
+                        RAM[hdt->A_REG] = hdt->D_REG + RAM[hdt->A_REG];
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = hdt->D_REG + RAM[hdt->A_REG];
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = hdt->D_REG + RAM[hdt->A_REG];
+                        hdt->A_REG = hdt->D_REG + RAM[hdt->A_REG];
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG += RAM[hdt->A_REG];
+                        hdt->A_REG = hdt->D_REG + RAM[hdt->A_REG];
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = hdt->D_REG + RAM[hdt->A_REG];
+                        hdt->A_REG = hdt->D_REG + RAM[hdt->A_REG];
+                        hdt->D_REG += RAM[hdt->A_REG];
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_MINUS_M:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = hdt->D_REG - RAM[hdt->A_REG];
+                        break;
+                    case DEST_D:
+                        hdt->D_REG -= RAM[hdt->A_REG];
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG -= RAM[hdt->A_REG];
+                        RAM[hdt->A_REG] = hdt->D_REG - RAM[hdt->A_REG];
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = hdt->D_REG - RAM[hdt->A_REG];
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = hdt->D_REG - RAM[hdt->A_REG];
+                        hdt->A_REG = hdt->D_REG - RAM[hdt->A_REG];
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG -= RAM[hdt->A_REG];
+                        hdt->A_REG = hdt->D_REG - RAM[hdt->A_REG];
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = hdt->D_REG - RAM[hdt->A_REG];
+                        hdt->A_REG = hdt->D_REG - RAM[hdt->A_REG];
+                        hdt->D_REG -= RAM[hdt->A_REG];
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_M_MINUS_D:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] -= hdt->D_REG;
+                        break;
+                    case DEST_D:
+                        hdt->D_REG = RAM[hdt->A_REG] - hdt->D_REG;
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG = RAM[hdt->A_REG] - hdt->D_REG;
+                        RAM[hdt->A_REG] -= hdt->D_REG;
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = RAM[hdt->A_REG] - hdt->D_REG;
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] -= hdt->D_REG;
+                        hdt->A_REG = RAM[hdt->A_REG] - hdt->D_REG;
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG = RAM[hdt->A_REG] - hdt->D_REG;
+                        hdt->A_REG = RAM[hdt->A_REG] - hdt->D_REG;
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] -= hdt->D_REG;
+                        hdt->A_REG = RAM[hdt->A_REG] - hdt->D_REG;
+                        hdt->D_REG = RAM[hdt->A_REG] - hdt->D_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_AND_M:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = hdt->D_REG & RAM[hdt->A_REG];
+                        break;
+                    case DEST_D:
+                        hdt->D_REG &= RAM[hdt->A_REG];
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG &= RAM[hdt->A_REG];
+                        RAM[hdt->A_REG] = hdt->D_REG & RAM[hdt->A_REG];
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = hdt->D_REG & RAM[hdt->A_REG];
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = hdt->D_REG & RAM[hdt->A_REG];
+                        hdt->A_REG = hdt->D_REG & RAM[hdt->A_REG];
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG &= RAM[hdt->A_REG];
+                        hdt->A_REG = hdt->D_REG & RAM[hdt->A_REG];
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = hdt->D_REG & RAM[hdt->A_REG];
+                        hdt->A_REG = hdt->D_REG & RAM[hdt->A_REG];
+                        hdt->D_REG &= RAM[hdt->A_REG];
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_OR_M:
+                switch (hdt->dest) {
+                    case DEST_M:
+                        RAM[hdt->A_REG] = hdt->D_REG | RAM[hdt->A_REG];
+                        break;
+                    case DEST_D:
+                        hdt->D_REG |= RAM[hdt->A_REG];
+                        break;
+                    case DEST_MD:
+                        hdt->D_REG |= RAM[hdt->A_REG];
+                        RAM[hdt->A_REG] = hdt->D_REG | RAM[hdt->A_REG];
+                        break;
+                    case DEST_A:
+                        hdt->A_REG = hdt->D_REG | RAM[hdt->A_REG];
+                        break;
+                    case DEST_AM:
+                        RAM[hdt->A_REG] = hdt->D_REG | RAM[hdt->A_REG];
+                        hdt->A_REG = hdt->D_REG | RAM[hdt->A_REG];
+                        break;
+                    case DEST_AD:
+                        hdt->D_REG |= RAM[hdt->A_REG];
+                        hdt->A_REG = hdt->D_REG | RAM[hdt->A_REG];
+                        break;
+                    case DEST_AMD:
+                        RAM[hdt->A_REG] = hdt->D_REG | RAM[hdt->A_REG];
+                        hdt->A_REG = hdt->D_REG | RAM[hdt->A_REG];
+                        hdt->D_REG |= RAM[hdt->A_REG];
+                        break;
+                    default:
+                        break;
+                }
+                break;
             default:
                 running = 0;
                 break;
@@ -298,63 +1073,830 @@ static void execute(HVMData *hdt) {
                     default:
                         break;
                 }
-                break;
-            SWITCH_CASE_JMP(COMP_D, hdt, hdt->D_REG)
-            SWITCH_CASE_JMP(COMP_A, hdt, hdt->A_REG)
-            SWITCH_CASE_JMP(COMP_NOT_D, hdt, ~hdt->D_REG)
-            SWITCH_CASE_JMP(COMP_NOT_A, hdt, ~hdt->A_REG)
-            SWITCH_CASE_JMP(COMP_MINUS_D, hdt, -hdt->D_REG)
-            SWITCH_CASE_JMP(COMP_MINUS_A, hdt, -hdt->A_REG)
-            SWITCH_CASE_JMP(COMP_D_PLUS_1, hdt, ++hdt->D_REG)
-            SWITCH_CASE_JMP(COMP_A_PLUS_1, hdt, ++hdt->A_REG)
-            SWITCH_CASE_JMP(COMP_D_MINUS_1, hdt, --hdt->D_REG)
-            SWITCH_CASE_JMP(COMP_A_MINUS_1, hdt, --hdt->A_REG)
-            SWITCH_CASE_JMP(COMP_D_PLUS_A, hdt, (hdt->D_REG + hdt->A_REG))
-            SWITCH_CASE_JMP(COMP_D_MINUS_A, hdt, (hdt->D_REG - hdt->A_REG))
-            SWITCH_CASE_JMP(COMP_A_MINUS_D, hdt, (hdt->A_REG - hdt->D_REG))
-            SWITCH_CASE_JMP(COMP_D_AND_A, hdt, (hdt->D_REG & hdt->A_REG))
-            SWITCH_CASE_JMP(COMP_D_OR_A, hdt, (hdt->D_REG | hdt->A_REG))
-            SWITCH_CASE_JMP(COMP_M, hdt, RAM[hdt->A_REG])
-            SWITCH_CASE_JMP(COMP_NOT_M, hdt, ~RAM[hdt->A_REG])
-            SWITCH_CASE_JMP(COMP_MINUS_M, hdt, -RAM[hdt->A_REG])
-            SWITCH_CASE_JMP(COMP_M_PLUS_1, hdt, ++RAM[hdt->A_REG])
-            SWITCH_CASE_JMP(COMP_M_MINUS_1, hdt, --RAM[hdt->A_REG])
-            SWITCH_CASE_JMP(COMP_D_PLUS_M, hdt, (hdt->D_REG + RAM[hdt->A_REG]))
-            SWITCH_CASE_JMP(COMP_D_MINUS_M, hdt, (hdt->D_REG - RAM[hdt->A_REG]))
-            SWITCH_CASE_JMP(COMP_M_MINUS_D, hdt, (RAM[hdt->A_REG] - hdt->D_REG))
-            SWITCH_CASE_JMP(COMP_D_AND_M, hdt, (hdt->D_REG & RAM[hdt->A_REG]))
-            SWITCH_CASE_JMP(COMP_D_OR_M, hdt, (hdt->D_REG | RAM[hdt->A_REG]))
 
+                break;
+            case COMP_D:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (hdt->D_REG > 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JEQ:
+                        if (hdt->D_REG == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (hdt->D_REG >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (hdt->D_REG < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (hdt->D_REG != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (hdt->D_REG <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_A:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (hdt->A_REG > 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JEQ:
+                        if (hdt->A_REG == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (hdt->A_REG >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (hdt->A_REG < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (hdt->A_REG != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (hdt->A_REG <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+
+                break;
+            case COMP_NOT_D:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (~hdt->D_REG > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if (~hdt->D_REG == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (~hdt->D_REG >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (~hdt->D_REG < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (~hdt->D_REG != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (~hdt->D_REG <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_NOT_A:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (~hdt->A_REG > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if (~hdt->A_REG == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (~hdt->A_REG >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (~hdt->A_REG < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (~hdt->A_REG != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (~hdt->A_REG <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_MINUS_D:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (-hdt->D_REG > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if (-hdt->D_REG == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (-hdt->D_REG >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (-hdt->D_REG < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (-hdt->D_REG != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (-hdt->D_REG <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_MINUS_A:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (-hdt->A_REG > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if (-hdt->A_REG == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (-hdt->A_REG >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (-hdt->A_REG < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (-hdt->A_REG != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (-hdt->A_REG <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_PLUS_1:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (++hdt->D_REG > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if (++hdt->D_REG == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (++hdt->D_REG >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (++hdt->D_REG < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (++hdt->D_REG != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (++hdt->D_REG <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_A_PLUS_1:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (++hdt->A_REG > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if (++hdt->A_REG == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (++hdt->A_REG >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (++hdt->A_REG < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (++hdt->A_REG != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (++hdt->A_REG <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_MINUS_1:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (--hdt->D_REG > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if (--hdt->D_REG == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (--hdt->D_REG >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (--hdt->D_REG < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (--hdt->D_REG != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (--hdt->D_REG <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_A_MINUS_1:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (--hdt->A_REG > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if (--hdt->A_REG == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (--hdt->A_REG >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (--hdt->A_REG < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (--hdt->A_REG != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (--hdt->A_REG <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_PLUS_A:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if ((hdt->D_REG + hdt->A_REG) > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if ((hdt->D_REG + hdt->A_REG) == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if ((hdt->D_REG + hdt->A_REG) >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if ((hdt->D_REG + hdt->A_REG) < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if ((hdt->D_REG + hdt->A_REG) != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if ((hdt->D_REG + hdt->A_REG) <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_MINUS_A:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if ((hdt->D_REG - hdt->A_REG) > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if ((hdt->D_REG - hdt->A_REG) == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if ((hdt->D_REG - hdt->A_REG) >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if ((hdt->D_REG - hdt->A_REG) < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if ((hdt->D_REG - hdt->A_REG) != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if ((hdt->D_REG - hdt->A_REG) <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_A_MINUS_D:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if ((hdt->A_REG - hdt->D_REG) > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if ((hdt->A_REG - hdt->D_REG) == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if ((hdt->A_REG - hdt->D_REG) >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if ((hdt->A_REG - hdt->D_REG) < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if ((hdt->A_REG - hdt->D_REG) != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if ((hdt->A_REG - hdt->D_REG) <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_AND_A:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if ((hdt->D_REG & hdt->A_REG) > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if ((hdt->D_REG & hdt->A_REG) == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if ((hdt->D_REG & hdt->A_REG) >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if ((hdt->D_REG & hdt->A_REG) < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if ((hdt->D_REG & hdt->A_REG) != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if ((hdt->D_REG & hdt->A_REG) <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_OR_A:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if ((hdt->D_REG | hdt->A_REG) > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if ((hdt->D_REG | hdt->A_REG) == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if ((hdt->D_REG | hdt->A_REG) >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if ((hdt->D_REG | hdt->A_REG) < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if ((hdt->D_REG | hdt->A_REG) != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if ((hdt->D_REG | hdt->A_REG) <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_M:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (RAM[hdt->A_REG] > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if (RAM[hdt->A_REG] == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (RAM[hdt->A_REG] >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (RAM[hdt->A_REG] < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (RAM[hdt->A_REG] != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (RAM[hdt->A_REG] <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_NOT_M:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (~RAM[hdt->A_REG] > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if (~RAM[hdt->A_REG] == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (~RAM[hdt->A_REG] >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (~RAM[hdt->A_REG] < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (~RAM[hdt->A_REG] != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (~RAM[hdt->A_REG] <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_MINUS_M:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (-RAM[hdt->A_REG] > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if (-RAM[hdt->A_REG] == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (-RAM[hdt->A_REG] >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (-RAM[hdt->A_REG] < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (-RAM[hdt->A_REG] != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (-RAM[hdt->A_REG] <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_M_PLUS_1:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if (++RAM[hdt->A_REG] > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if (++RAM[hdt->A_REG] == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if (++RAM[hdt->A_REG] >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if (++RAM[hdt->A_REG] < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if (++RAM[hdt->A_REG] != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if (++RAM[hdt->A_REG] <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_PLUS_M:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if ((hdt->D_REG + RAM[hdt->A_REG]) > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if ((hdt->D_REG + RAM[hdt->A_REG]) == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if ((hdt->D_REG + RAM[hdt->A_REG]) >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if ((hdt->D_REG + RAM[hdt->A_REG]) < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if ((hdt->D_REG + RAM[hdt->A_REG]) != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if ((hdt->D_REG + RAM[hdt->A_REG]) <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_MINUS_M:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if ((hdt->D_REG - RAM[hdt->A_REG]) > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if ((hdt->D_REG - RAM[hdt->A_REG]) == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if ((hdt->D_REG - RAM[hdt->A_REG]) >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if ((hdt->D_REG - RAM[hdt->A_REG]) < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if ((hdt->D_REG - RAM[hdt->A_REG]) != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if ((hdt->D_REG - RAM[hdt->A_REG]) <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_M_MINUS_D:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if ((RAM[hdt->A_REG] - hdt->D_REG) > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if ((RAM[hdt->A_REG] - hdt->D_REG) == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if ((RAM[hdt->A_REG] - hdt->D_REG) >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if ((RAM[hdt->A_REG] - hdt->D_REG) < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if ((RAM[hdt->A_REG] - hdt->D_REG) != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if ((RAM[hdt->A_REG] - hdt->D_REG) <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_AND_M:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if ((hdt->D_REG & RAM[hdt->A_REG]) > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if ((hdt->D_REG & RAM[hdt->A_REG]) == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if ((hdt->D_REG & RAM[hdt->A_REG]) >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if ((hdt->D_REG & RAM[hdt->A_REG]) < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if ((hdt->D_REG & RAM[hdt->A_REG]) != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if ((hdt->D_REG & RAM[hdt->A_REG]) <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            case COMP_D_OR_M:
+                switch (hdt->jmp) {
+                    case JGT:
+                        if ((hdt->D_REG | RAM[hdt->A_REG]) > 0)
+                            hdt->pc = hdt->A_REG;
+
+                        break;
+                    case JEQ:
+                        if ((hdt->D_REG | RAM[hdt->A_REG]) == 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JGE:
+                        if ((hdt->D_REG | RAM[hdt->A_REG]) >= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLT:
+                        if ((hdt->D_REG | RAM[hdt->A_REG]) < 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JNE:
+                        if ((hdt->D_REG | RAM[hdt->A_REG]) != 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JLE:
+                        if ((hdt->D_REG | RAM[hdt->A_REG]) <= 0)
+                            hdt->pc = hdt->A_REG;
+                        break;
+                    case JMP:
+                        hdt->pc = hdt->A_REG;
+                        break;
+                    default:
+                        break;
+
+                }
+                break;
             default:
                 running = 0;
                 break;
         }
 
     }
-}
-
-static void snapshot(HVMData *hdt) {
-    char *msg = " _   ___      ____  __   \n"
-                "| | | |\\ \\   / |  \\/  |  \n"
-                "| |_| | \\ \\ / /| |\\/| |  \n"
-                "|  _  |  \\ V / | |  | |  \n"
-                "|_| |_|   \\_/  |_|  |_|  \n"
-                "                          \n"
-                "Memory Snapshot \n"
-                "****************************************\n"
-                "*           *            *    CPU      *\n"
-                "*           *            ***************\n"
-                "*   ROM     *   RAM      |  A REG [%d]  \n"
-                "*           *            |--------------\n"
-                "*           *            |  D REG [%d]  \n"
-                "*           *            |--------------\n"
-                "*           *            |  PC [%d]     \n";
-
-    char *rom = "_________________________\n"
-                "|  %x             %d     \n";
-    printf(msg, hdt->A_REG, hdt->D_REG, hdt->pc);
-    for (int i = 0; ROM[i] ^ 0xffff; ++i) {
-        printf(rom, ROM[i], RAM[i]);
-    }
 
 }
+
