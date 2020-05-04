@@ -7,20 +7,37 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <assert.h>
+#include <sys/stat.h>
 #include "hopcodes.h"
-#include "utils.h"
 
-#define INVALID (-1)
-#define P_OFF 0x8 /* program offset */
+#define errprint(format, ...) fprintf (stderr, format, __VA_ARGS__);
 
-#define ROM_SIZE 32768 /* 32KB */
-#define RAM_SIZE 16384 /* 16KB */
+/* read Most Significant Bit */
+#define read_msb(n) ( ((n) << 8u) | ((n) >> 8u) )
 
-typedef struct _HVMData {
-    uint16_t comp:10;
-    uint8_t dest:3;
-    uint8_t jmp:3;
+/* End of signature */
+#define EOS 0xFFFF 
+
+/* payload offset */
+#define P_OFF 0x8 
+
+/* 32KB */
+#define ROM_SIZE 32768 
+
+/* 16KB */
+#define RAM_SIZE 16384
+
+#define EmitComp(n) ((n & 0xFFC0u) >> 6u)
+#define EmitDest(n) ((n & 0x38u) >> 3u)
+#define EmitJmp(n) (n & 0x07u)
+
+typedef uint16_t u16;
+typedef uint8_t u8;
+
+typedef struct {
+    u16 comp:10;
+    u8 dest:3;
+    u8 jmp:3;
     int16_t A_REG:16;
     int16_t D_REG:16;
     int state;
@@ -34,23 +51,24 @@ enum hvm_state {
 };
 
 /* Memory */
-uint16_t ROM[ROM_SIZE];
-int16_t RAM[RAM_SIZE];
+static u16 ROM[ROM_SIZE];
+static int16_t RAM[RAM_SIZE];
 
 /* Current state of machine */
-int running = 1;
-
+static int running = 1;
 
 /* Initialize VM */
 static void vm_init(char *);
 
 /* VM State: Fetch, Decode, Execute */
-static uint16_t fetch(HVMData *);
-static void decode(uint16_t, HVMData *);
+static u16 fetch(HVMData *);
+static void decode(u16, HVMData *);
 static void execute(HVMData *);
 
 /* Memory snapshot */
 static void snapshot(HVMData *);
+
+static int util_fd_isreg(const char *filename);
 
 
 int main(int argc, char *argv[]) {
@@ -63,17 +81,18 @@ int main(int argc, char *argv[]) {
                 printf("%s\n", usage);
                 break;
             default: /* '?' */
-                hvm_error("Usage: %s [file.hex]\n", Error, argv[0]);
+                errprint("Usage: %s [file.hex]\n", argv[0])
         }
     }
 
     if (argv[optind] == NULL || strlen(argv[optind]) == 0) {
-        hvm_error("error: %s: No such file or directory\n", Fatal, argv[optind]);
+        errprint("error: [%s] No such file or directory\n", argv[optind])
+        exit(EXIT_FAILURE);
     }
 
     vm_init(argv[optind]);
 
-    uint16_t instr;
+    u16 instr;
     HVMData hdt = {
             .state=hvm_fetch,
             .pc=0};
@@ -82,7 +101,7 @@ int main(int argc, char *argv[]) {
         // Fetch State
         instr = fetch(&hdt);
 
-        if (instr == INVALID)
+        if (instr == EOS)
             break;
         // Decode State
         decode(instr, &hdt);
@@ -123,19 +142,21 @@ static void snapshot(HVMData *hdt) {
 
 
 static void vm_init(char *arg) {
-    uint16_t buff;
+    u16 buff;
     int ind = 0;
 
     FILE *hexfp = NULL;
 
-    if (fd_isreg(arg) > 0) {
-        hexfp = hvm_fopen(arg, "rb");
+    if (util_fd_isreg(arg) > 0) {
+        hexfp = fopen(arg, "rb");
+        if (!hexfp) {
+            errprint("error: [%s] unable to open file\n", arg)
+            exit(EXIT_FAILURE);
+        }
     } else {
-        hvm_error("error: %s: No such file or directory\n", Fatal, arg);
+        errprint("error: [%s] No such file or directory\n", arg)
+        exit(EXIT_FAILURE);
     }
-
-
-    assert(hexfp != NULL);
 
     memset(RAM, 0, sizeof(RAM));
     memset(ROM, 0, sizeof(ROM));
@@ -146,28 +167,37 @@ static void vm_init(char *arg) {
         ROM[ind++] = read_msb(buff);
     }
     // end-of-program signature
-    ROM[ind] = (uint16_t) EOF;
-    hvm_fclose(hexfp);
+    ROM[ind] = EOS;
+    fclose(hexfp);
 }
 
-static uint16_t fetch(HVMData *hdt) {
+static u16 fetch(HVMData *hdt) {
     return ROM[hdt->pc++];
 }
 
-static void decode(uint16_t instr, HVMData *hdt) {
+static void decode(u16 instr, HVMData *hdt) {
     // check instr first significant 3 bits.If 111 it is C instr,otherwise A instr
-    if (((instr & 0xE000) >> 13) ^ 0x7) {
+    if (((instr & 0xE000u) >> 13u) ^ 0x7u) {
         hdt->state = hvm_decode;
         hdt->A_REG = instr;
         return;
     }
     // extract comp,dest,jmp parts of instr
-    hdt->comp = (uint16_t) ((instr & 0xFFC0) >> 6);     // 1111111111000000
-    hdt->dest = (uint8_t) ((instr & 0x38) >> 3);        // 0000000000111000
-    hdt->jmp = (uint8_t) (instr & 0x07);                // 0000000000000111
+    hdt->comp = EmitComp(instr);     // 1111111111000000
+    hdt->dest = EmitDest(instr);     // 0000000000111000
+    hdt->jmp =  EmitJmp(instr);      // 0000000000000111
 
     // turn machine state execute
     hdt->state = hvm_execute;
+}
+
+static int util_fd_isreg(const char *filename) {
+    struct stat st;
+
+    if (stat(filename, &st))
+        return -1;
+
+    return S_ISREG(st.st_mode);
 }
 
 

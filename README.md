@@ -5,8 +5,8 @@ The platform is a 16-bit von Neumann machine, consisting of a CPU,two separate m
 
 ### Building
 ```bash
-make clean
-make
+mkdir build && cd build
+cmake .. && cmake --build .
 ```
 ### Usage
 ```bash
